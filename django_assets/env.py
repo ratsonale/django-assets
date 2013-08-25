@@ -9,7 +9,7 @@ except ImportError:
     # Support pre-1.3 versions.
     finders = None
 
-from glob import Globber, has_magic
+from .glob import Globber, has_magic
 
 
 __all__ = ('register',)

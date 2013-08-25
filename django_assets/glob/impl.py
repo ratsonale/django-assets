@@ -1,133 +1,11 @@
-"""Copied from python-glob2, made to work in a single file, to avoid
-having a dependency.
-"""
-
-
-"""Filename matching with shell patterns.
-
-fnmatch(FILENAME, PATTERN) matches according to the local convention.
-fnmatchcase(FILENAME, PATTERN) always takes case in account.
-
-The functions operate by translating the pattern into a regular
-expression.  They cache the compiled regular expressions for speed.
-
-The function translate(PATTERN) returns a regular expression
-corresponding to PATTERN.  (It does not compile it.)
-"""
-
-import re
-
-__all__ = ["filter", "fnmatch", "fnmatchcase", "translate"]
-
-_cache = {}
-_MAXCACHE = 100
-
-def _purge():
-    """Clear the pattern cache"""
-    _cache.clear()
-
-def fnmatch(name, pat):
-    """Test whether FILENAME matches PATTERN.
-
-    Patterns are Unix shell style:
-
-    *       matches everything
-    ?       matches any single character
-    [seq]   matches any character in seq
-    [!seq]  matches any char not in seq
-
-    An initial period in FILENAME is not special.
-    Both FILENAME and PATTERN are first case-normalized
-    if the operating system requires it.
-    If you don't want this, use fnmatchcase(FILENAME, PATTERN).
-    """
-
-    import os
-    name = os.path.normcase(name)
-    pat = os.path.normcase(pat)
-    return fnmatchcase(name, pat)
-
-def fnmatch_filter(names, pat):
-    """Return the subset of the list NAMES that match PAT"""
-    import os,posixpath
-    result=[]
-    pat=os.path.normcase(pat)
-    if not pat in _cache:
-        res = translate(pat)
-        if len(_cache) >= _MAXCACHE:
-            _cache.clear()
-        _cache[pat] = re.compile(res)
-    match=_cache[pat].match
-    if os.path is posixpath:
-        # normcase on posix is NOP. Optimize it away from the loop.
-        for name in names:
-            m = match(name)
-            if m:
-                result.append((name, m.groups()))
-    else:
-        for name in names:
-            m = match(os.path.normcase(name))
-            if m:
-                result.append((name, m.groups()))
-    return result
-
-def fnmatchcase(name, pat):
-    """Test whether FILENAME matches PATTERN, including case.
-
-    This is a version of fnmatch() which doesn't case-normalize
-    its arguments.
-    """
-
-    if not pat in _cache:
-        res = translate(pat)
-        if len(_cache) >= _MAXCACHE:
-            _cache.clear()
-        _cache[pat] = re.compile(res)
-    return _cache[pat].match(name) is not None
-
-def translate(pat):
-    """Translate a shell PATTERN to a regular expression.
-
-    There is no way to quote meta-characters.
-    """
-
-    i, n = 0, len(pat)
-    res = ''
-    while i < n:
-        c = pat[i]
-        i = i+1
-        if c == '*':
-            res = res + '(.*)'
-        elif c == '?':
-            res = res + '(.)'
-        elif c == '[':
-            j = i
-            if j < n and pat[j] == '!':
-                j = j+1
-            if j < n and pat[j] == ']':
-                j = j+1
-            while j < n and pat[j] != ']':
-                j = j+1
-            if j >= n:
-                res = res + '\\['
-            else:
-                stuff = pat[i:j].replace('\\','\\\\')
-                i = j+1
-                if stuff[0] == '!':
-                    stuff = '^' + stuff[1:]
-                elif stuff[0] == '^':
-                    stuff = '\\' + stuff
-                res = '%s([%s])' % (res, stuff)
-        else:
-            res = res + re.escape(c)
-    return res + '\Z(?ms)'
-
-
 """Filename globbing utility."""
+
+from __future__ import absolute_import
 
 import sys
 import os
 import re
+from . import fnmatch
 
 
 class Globber(object):
@@ -146,7 +24,7 @@ class Globber(object):
         """
         try:
             names = self.listdir(top)
-        except os.error, err:
+        except os.error as err:
             return
 
         items = []
@@ -164,7 +42,10 @@ class Globber(object):
     def glob(self, pathname, with_matches=False):
         """Return a list of paths matching a pathname pattern.
 
-        The pattern may contain simple shell-style wildcards a la fnmatch.
+        The pattern may contain simple shell-style wildcards a la
+        fnmatch. However, unlike fnmatch, filenames starting with a
+        dot are special cases that are not matched by '*' and '?'
+        patterns.
 
         """
         return list(self.iglob(pathname, with_matches))
@@ -173,7 +54,10 @@ class Globber(object):
         """Return an iterator which yields the paths matching a pathname
         pattern.
 
-        The pattern may contain simple shell-style wildcards a la fnmatch.
+        The pattern may contain simple shell-style wildcards a la
+        fnmatch. However, unlike fnmatch, filenames starting with a
+        dot are special cases that are not matched by '*' and '?'
+        patterns.
 
         If ``with_matches`` is True, then for each matching path
         a 2-tuple will be returned; the second element if the tuple
@@ -210,7 +94,10 @@ class Globber(object):
         # If the directory is globbed, recurse to resolve.
         # If at this point there is no directory part left, we simply
         # continue with dirname="", which will search the current dir.
-        if dirname and has_magic(dirname):
+        # `os.path.split()` returns the argument itself as a dirname if it is a
+        # drive or UNC path.  Prevent an infinite recursion if a drive or UNC path
+        # contains magic characters (i.e. r'\\?\C:').
+        if dirname != pathname and has_magic(dirname):
             # Note that this may return files, which will be ignored
             # later when we try to use them as directories.
             # Prefiltering them here would only require more IO ops.
@@ -221,7 +108,7 @@ class Globber(object):
         # Resolve ``basename`` expr for every directory found
         for dirname, dir_groups in dirs:
             for name, groups in self.resolve_pattern(
-                dirname, basename, not rootcall):
+                    dirname, basename, not rootcall):
                 yield os.path.join(dirname, name), dir_groups + groups
 
     def resolve_pattern(self, dirname, pattern, globstar_with_root):
@@ -234,9 +121,13 @@ class Globber(object):
         and faster to filter here than in :meth:`_iglob`.
         """
 
-        if isinstance(pattern, unicode) and not isinstance(dirname, unicode):
-            dirname = unicode(dirname, sys.getfilesystemencoding() or
-                                       sys.getdefaultencoding())
+        if sys.version_info[0] == 3:
+            if isinstance(pattern, bytes):
+                dirname = bytes(os.curdir, 'ASCII')
+        else:
+            if isinstance(pattern, unicode) and not isinstance(dirname, unicode):
+                dirname = unicode(dirname, sys.getfilesystemencoding() or
+                                           sys.getdefaultencoding())
 
         # If no magic, short-circuit, only check for existence
         if not has_magic(pattern):
@@ -260,7 +151,7 @@ class Globber(object):
                 for top, entries in self.walk(dirname):
                     _mkabs = lambda s: os.path.join(top[len(dirname)+1:], s)
                     names.extend(map(_mkabs, entries))
-                    # Reset pattern so that fnmatch(), which does not understand
+                # Reset pattern so that fnmatch(), which does not understand
                 # ** specifically, will only return a single group match.
                 pattern = '*'
             else:
@@ -268,12 +159,12 @@ class Globber(object):
         except os.error:
             return []
 
-        if pattern[0] != '.':
+        if not _ishidden(pattern):
             # Remove hidden files by default, but take care to ensure
             # that the empty string we may have added earlier remains.
             # Do not filter out the '' that we might have added earlier
-            names = filter(lambda x: not x or x[0] != '.', names)
-        return fnmatch_filter(names, pattern)
+            names = filter(lambda x: not x or not _ishidden(x), names)
+        return fnmatch.filter(names, pattern)
 
 
 default_globber = Globber()
@@ -283,6 +174,14 @@ del default_globber
 
 
 magic_check = re.compile('[*?[]')
+magic_check_bytes = re.compile(b'[*?[]')
 
 def has_magic(s):
-    return magic_check.search(s) is not None
+    if isinstance(s, bytes):
+        match = magic_check_bytes.search(s)
+    else:
+        match = magic_check.search(s)
+    return match is not None
+
+def _ishidden(path):
+    return path[0] in ('.', b'.'[0])

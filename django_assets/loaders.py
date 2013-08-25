@@ -14,8 +14,8 @@ except ImportError:
     # Since Django #12295, custom templatetags are no longer mapped into
     # the Django namespace. Support both versions.
     AssetsNodeMapped = None
-AssetsNodeClasses = filter(lambda c: bool(c),
-    (AssetsNodeOriginal, AssetsNodeMapped))
+AssetsNodeClasses = tuple(filter(lambda c: bool(c),
+                                (AssetsNodeOriginal, AssetsNodeMapped)))
 
 
 __all__ = ('DjangoLoader', 'get_django_template_dirs',)
@@ -85,7 +85,7 @@ class DjangoLoader(GlobLoader):
         # parse the template for asset nodes
         try:
             t = template.Template(contents)
-        except template.TemplateSyntaxError, e:
+        except template.TemplateSyntaxError as e:
             raise LoaderError('Django parser failed: %s' % e)
         else:
             result = []
